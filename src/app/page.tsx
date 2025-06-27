@@ -1,17 +1,24 @@
-import { Button } from "@/components/ui/button";
-import Image from "next/image";
+'use client';
 
+import { useState } from "react";
+import Header from "@/components/custom/Header";
+import HeroSection from "@/components/custom/HeroSection";
+import Sidebar from "@/components/custom/SideBar";
 
 export default function Home() {
-  return (
-    <div>
-      <h1>fasdfs</h1>
-      <Button variant="outline">afdfadsfa</Button>
-      <Button variant="destructive">Delete</Button>
-      <Button variant="ghost">Ghost</Button>
-      <Button variant="secondary">Secondary</Button>
-      <Button variant="ghost">Ghost</Button>
+  const [sidebarOpen, setSidebarOpen] = useState(true);
 
+  return (
+    <div className="relative">
+      <Sidebar open={sidebarOpen} setOpen={setSidebarOpen} />
+      <div
+        className={`transition-all duration-300 ${
+          sidebarOpen ? 'pl-[280px]' : 'pl-0'
+        }`}
+      >
+        <Header />
+        <HeroSection />
+      </div>
     </div>
   );
 }
