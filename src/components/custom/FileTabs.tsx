@@ -1,7 +1,7 @@
 "use client";
 
 import React from "react";
-import { X, File } from "lucide-react";
+import { X } from "lucide-react";
 
 interface FileTab {
   path: string;
@@ -25,26 +25,25 @@ export default function FileTabs({
   const getFileIcon = (filename: string) => {
     const ext = filename.split(".").pop()?.toLowerCase();
 
-    // Return appropriate icon based on file extension
     switch (ext) {
       case "js":
       case "jsx":
-        return "📄"; // JavaScript
+        return "📄";
       case "ts":
       case "tsx":
-        return "🔷"; // TypeScript
+        return "🔷";
       case "html":
-        return "🌐"; // HTML
+        return "🌐";
       case "css":
-        return "🎨"; // CSS
+        return "🎨";
       case "json":
-        return "📋"; // JSON
+        return "📋";
       case "md":
-        return "📝"; // Markdown
+        return "📝";
       case "py":
-        return "🐍"; // Python
+        return "🐍";
       default:
-        return "📄"; // Default file
+        return "📄";
     }
   };
 
@@ -52,9 +51,13 @@ export default function FileTabs({
     return null;
   }
 
+  const uniqueTabs = openTabs.filter(
+    (tab, idx, arr) => arr.findIndex((t) => t.path === tab.path) === idx
+  );
+
   return (
     <div className="flex bg-[#2d2d30] border-b border-[#2d2d30] overflow-x-auto scrollbar-thin scrollbar-thumb-[#424242] scrollbar-track-transparent">
-      {openTabs.map((tab) => (
+      {uniqueTabs.map((tab) => (
         <div
           key={tab.path}
           className={`

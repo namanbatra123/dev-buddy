@@ -37,7 +37,6 @@ export default function FileExplorer({
   onToggleFolder,
   openFolders = new Set(),
 }: FileExplorerProps) {
-  // Build file tree structure from flat file list
   const buildFileTree = (files: FileItem[]): FileNode[] => {
     const root: FileNode[] = [];
     const folderMap = new Map<string, FileNode>();
@@ -52,14 +51,12 @@ export default function FileExplorer({
         currentPath = currentPath ? `${currentPath}/${part}` : part;
 
         if (isLast) {
-          // It's a file
           currentLevel.push({
             name: part,
             type: "file",
             path: file.path,
           });
         } else {
-          // It's a folder
           let folder = folderMap.get(currentPath);
           if (!folder) {
             folder = {
@@ -90,7 +87,9 @@ export default function FileExplorer({
               : "text-[#cccccc]"
           }`}
           style={{ paddingLeft: `${depth * 12 + 8}px` }}
-          onClick={() => {
+          onClick={(e) => {
+            e.stopPropagation();
+            e.preventDefault();
             if (node.type === "file" && node.path) {
               onFileSelect(node.path);
             } else if (node.type === "folder" && node.path && onToggleFolder) {

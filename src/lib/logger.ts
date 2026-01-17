@@ -1,4 +1,4 @@
-function logError(message: string, error?: any): void {
+function logError(message: string, error?: unknown): void {
   const timestamp = new Date().toISOString();
   const formattedMessage = `[ERROR] ${timestamp}: ${message}`;
 
@@ -13,5 +13,5 @@ function logError(message: string, error?: any): void {
 }
 
 export const logger = {
-  error: (message: string, error?: any) => logError(message, error),
+  error: (message: string, error?: unknown) => logError(message, error),
 };

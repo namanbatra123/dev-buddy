@@ -1,7 +1,8 @@
 "use client";
 
 import React, { useRef, useEffect } from "react";
-import Editor from "@monaco-editor/react";
+import Editor, { Monaco } from "@monaco-editor/react";
+import * as monaco from "monaco-editor";
 
 interface MultiFileEditorProps {
   files: { path: string; content: string }[];
@@ -16,7 +17,7 @@ export default function MultiFileEditor({
   onChange,
   readOnly = false,
 }: MultiFileEditorProps) {
-  const editorRef = useRef<any>(null);
+  const editorRef = useRef<monaco.editor.IStandaloneCodeEditor | null>(null);
 
   useEffect(() => {
     if (editorRef.current) {
@@ -24,10 +25,11 @@ export default function MultiFileEditor({
     }
   }, [readOnly]);
 
-  const handleEditorDidMount = (editor: any, monaco: any) => {
+  const handleEditorDidMount = (
+    editor: monaco.editor.IStandaloneCodeEditor,
+    monacoInstance: Monaco
+  ) => {
     editorRef.current = editor;
-
-    // Configure Monaco theme - VS Code Dark+
     monaco.editor.defineTheme("vs-code-dark-plus", {
       base: "vs-dark",
       inherit: true,
@@ -95,15 +97,6 @@ export default function MultiFileEditor({
       setTimeout(() => {
         editor.getAction("editor.action.formatDocument")?.run();
       }, 100);
-    });
-
-    // Auto format on type for certain characters
-    editor.onDidType((text: string) => {
-      if ([";", "}", ")", "]"].includes(text)) {
-        setTimeout(() => {
-          editor.getAction("editor.action.formatDocument")?.run();
-        }, 100);
-      }
     });
   };
 

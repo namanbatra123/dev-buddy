@@ -2,17 +2,39 @@
 
 import React, { useState, KeyboardEvent, useRef, useEffect } from "react";
 import { motion } from "framer-motion";
+import { useSession } from "next-auth/react";
+import { useRouter } from "next/navigation";
 import { generateGeminiResponse } from "@/lib/gemini";
 import { Button } from "@/components/ui/button";
 import { Send, Copy, Download, FolderOpen } from "lucide-react";
 import FileExplorer from "./FileExplorer";
 import FileTabs from "./FileTabs";
-import MultiFileEditor from "./MultiFileEditor";
+import dynamic from "next/dynamic";
 import { Message, FileItem, FileTab, Chat } from "@/lib/types";
+import Preview from "./Preview";
 import { logger } from "@/lib/logger";
+import LoginModal from "../LoginModal";
 
-export default function HeroSection() {
-  // State
+const MultiFileEditor = dynamic(() => import("./MultiFileEditor"), {
+  ssr: false,
+  loading: () => (
+    <div className="h-full flex items-center justify-center text-[#cccccc] bg-[#1e1e1e]">
+      <div className="text-center">
+        <div className="text-4xl mb-4">⚡</div>
+        <div className="text-lg mb-2 font-medium">Loading Editor...</div>
+      </div>
+    </div>
+  ),
+});
+
+interface HeroSectionProps {
+  initialChatId?: string;
+}
+
+export default function HeroSection({ initialChatId }: HeroSectionProps = {}) {
+  const router = useRouter();
+  const { data: session, status } = useSession();
+  const [showLoginModal, setShowLoginModal] = useState(false);
   const [initialPrompt, setInitialPrompt] = useState("");
   const [currentMessage, setCurrentMessage] = useState("");
   const [messages, setMessages] = useState<Message[]>([]);
@@ -24,11 +46,9 @@ export default function HeroSection() {
   const [openFolders, setOpenFolders] = useState<Set<string>>(
     new Set(["src", "public", "components"])
   );
-
-  // Chat history state
+  const [showPreview, setShowPreview] = useState(false);
   const [chats, setChats] = useState<Chat[]>([]);
   const [activeChat, setActiveChat] = useState<string | null>(null);
-  const [hasInteracted, setHasInteracted] = useState(false);
 
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLInputElement>(null);
@@ -44,12 +64,77 @@ export default function HeroSection() {
     }
   }, [messages, chatStarted]);
 
-  // Function to generate a chat name from prompt
+  useEffect(() => {
+    if (status === "authenticated" && session?.user) {
+      loadChats();
+    }
+  }, [status, session]);
+
+  useEffect(() => {
+    if (status === "unauthenticated") {
+      setChats([]);
+      setActiveChat(null);
+      setMessages([]);
+      setProjectFiles([]);
+      setOpenTabs([]);
+      setChatStarted(false);
+      setActiveFile(null);
+    }
+  }, [status]);
+
+  useEffect(() => {
+    if (
+      initialChatId &&
+      chats.length > 0 &&
+      activeChat !== initialChatId &&
+      status === "authenticated"
+    ) {
+      const chat = chats.find((c) => c.id === initialChatId);
+      if (chat) {
+        switchToChat(initialChatId);
+      }
+    }
+  }, [initialChatId, chats, status]);
+
+  const loadChats = async () => {
+    try {
+      const response = await fetch("/api/chats");
+      if (response.ok) {
+        const chatsData = await response.json();
+        setChats(chatsData);
+      }
+    } catch (error) {
+      logger.error("Failed to load chats", error);
+    }
+  };
+
+  const saveChat = async (chat: Chat) => {
+    try {
+      const method = chats.find((c) => c.id === chat.id) ? "PUT" : "POST";
+      const url = method === "PUT" ? `/api/chats/${chat.id}` : "/api/chats";
+
+      const response = await fetch(url, {
+        method,
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          id: chat.id,
+          name: chat.name,
+          messages: chat.messages,
+          projectFiles: chat.projectFiles,
+        }),
+      });
+
+      if (!response.ok) {
+        logger.error("Failed to save chat", response.statusText);
+      }
+    } catch (error) {
+      logger.error("Failed to save chat", error);
+    }
+  };
+
   const generateChatName = (prompt: string): string => {
-    // Trim whitespace and extra spaces
     const trimmedPrompt = prompt.trim().replace(/\s+/g, " ");
 
-    // Create shorter name for the chat (first 5 words or 30 chars max)
     let chatName = trimmedPrompt.split(" ").slice(0, 5).join(" ");
     if (chatName.length > 30) {
       chatName = chatName.substring(0, 30).trim() + "...";
@@ -57,7 +142,6 @@ export default function HeroSection() {
     return chatName;
   };
 
-  // Create a new chat
   const createNewChat = (prompt: string): string => {
     const chatId = Date.now().toString();
     const chatName = prompt ? generateChatName(prompt) : "New Chat";
@@ -72,10 +156,10 @@ export default function HeroSection() {
 
     setChats((prev) => [newChat, ...prev]);
     setActiveChat(chatId);
+
     return chatId;
   };
 
-  // Switch to an existing chat
   const switchToChat = (chatId: string) => {
     const chat = chats.find((chat) => chat.id === chatId);
     if (!chat) return;
@@ -84,13 +168,13 @@ export default function HeroSection() {
     setMessages(chat.messages);
     setProjectFiles(chat.projectFiles);
 
-    // Reset other UI states
     setOpenTabs([]);
     setActiveFile(null);
     setChatStarted(chat.messages.length > 0);
     setCurrentMessage("");
 
-    // If chat has files, open the main one
+    router.push(`/?id=${chatId}`);
+
     if (chat.projectFiles.length > 0) {
       const mainFile =
         chat.projectFiles.find(
@@ -113,19 +197,22 @@ export default function HeroSection() {
     if (!initialPrompt.trim()) return;
     if (loading) return;
 
+    if (status !== "authenticated") {
+      setShowLoginModal(true);
+      return;
+    }
+
     const promptToSend = initialPrompt.trim();
     setInitialPrompt("");
     setChatStarted(true);
-    setHasInteracted(true);
 
-    // Create a new chat or update an existing empty one with this prompt
-    let chatId;
-    if (activeChat) {
-      // Update the name of the existing chat with the prompt
-      chatId = activeChat;
+    let chatId = activeChat;
+    if (!chatId) {
+      chatId = createNewChat(promptToSend);
+    } else {
       setChats((prev) => {
         return prev.map((chat) => {
-          if (chat.id === activeChat) {
+          if (chat.id === chatId) {
             return {
               ...chat,
               name: generateChatName(promptToSend),
@@ -134,9 +221,6 @@ export default function HeroSection() {
           return chat;
         });
       });
-    } else {
-      // Create a new chat with this prompt
-      chatId = createNewChat(promptToSend);
     }
 
     await sendMessage(promptToSend, chatId);
@@ -154,7 +238,6 @@ export default function HeroSection() {
     try {
       setLoading(true);
 
-      // Add user message
       const userMessage: Message = {
         id: Date.now().toString(),
         role: "user",
@@ -163,150 +246,132 @@ export default function HeroSection() {
 
       setMessages((prev) => [...prev, userMessage]);
 
-      // Update in chat history
       setChats((prevChats) => {
-        return prevChats.map((chat) => {
+        const updatedChats = prevChats.map((chat) => {
           if (chat.id === chatId) {
-            // If this is the first message in a "New Chat", update the name
-            if (chat.name === "New Chat" && chat.messages.length === 0) {
-              return {
-                ...chat,
-                name: generateChatName(content),
-                messages: [...chat.messages, userMessage],
-              };
-            }
-            return {
+            const updatedChat = {
               ...chat,
               messages: [...chat.messages, userMessage],
             };
+            saveChat(updatedChat);
+            return updatedChat;
           }
           return chat;
         });
+        return updatedChats;
       });
 
-      const result = await generateGeminiResponse(content);
+      const currentChat = chats.find((c) => c.id === chatId);
+      const chatHistoryForContext = currentChat ? currentChat.messages : [];
+
+      const result = await generateGeminiResponse(
+        content,
+        chatHistoryForContext
+      );
 
       if (result) {
+        let cleanResult = result;
+        if (cleanResult.includes("```")) {
+          cleanResult = cleanResult
+            .replace(/```[a-zA-Z]*\n?/g, "")
+            .replace(/```/g, "");
+        }
+        cleanResult = cleanResult.trim();
+        if (cleanResult.startsWith('"') && cleanResult.endsWith('"')) {
+          try {
+            cleanResult = JSON.parse(cleanResult);
+          } catch {}
+        }
+        let parsedResult;
         try {
-          // Additional cleanup for any remaining markdown formatting
-          let cleanResult = result;
-
-          // Remove any markdown code blocks
-          if (cleanResult.includes("```")) {
-            cleanResult = cleanResult
-              .replace(/```[a-zA-Z]*\n?/g, "")
-              .replace(/```/g, "");
-          }
-
-          // Remove any leading/trailing whitespace
-          cleanResult = cleanResult.trim();
-
-          // Handle double-escaped JSON strings
-          if (cleanResult.startsWith('"') && cleanResult.endsWith('"')) {
-            try {
-              // First parse to un-escape the outer quotes
-              cleanResult = JSON.parse(cleanResult);
-            } catch (e) {
-              // Unable to parse as string literal, proceed with original
+          parsedResult = JSON.parse(cleanResult);
+        } catch {
+          cleanResult = cleanResult.replace(
+            /("content":\s?")(([\s\S]*?))(")/g,
+            (match, p1, p2, p3) => {
+              return (
+                p1 +
+                p2.replace(/[\r\n\t\b\f]/g, (c: string) => {
+                  switch (c) {
+                    case "\r":
+                      return "\r";
+                    case "\n":
+                      return "\n";
+                    case "\t":
+                      return "\t";
+                    case "\b":
+                      return "\b";
+                    case "\f":
+                      return "\f";
+                    default:
+                      return c;
+                  }
+                }) +
+                p3
+              );
             }
-          }
+          );
+          try {
+            parsedResult = JSON.parse(cleanResult);
+          } catch {}
+        }
+        if (parsedResult.files && Array.isArray(parsedResult.files)) {
+          const newFiles: FileItem[] = parsedResult.files.map(
+            (file: { path: string; content: string }) => ({
+              path: file.path,
+              content: file.content,
+            })
+          );
 
-          // Parse the JSON response
-          const parsedResult = JSON.parse(cleanResult);
-
-          if (parsedResult.files && Array.isArray(parsedResult.files)) {
-            const newFiles: FileItem[] = parsedResult.files.map(
-              (file: any) => ({
-                path: file.path,
-                content: file.content,
-              })
-            );
-
-            setProjectFiles(newFiles);
-
-            // Update chat history with files
-            setChats((prevChats) => {
-              return prevChats.map((chat) => {
-                if (chat.id === chatId) {
-                  return {
-                    ...chat,
-                    projectFiles: newFiles,
-                  };
-                }
-                return chat;
-              });
-            });
-
-            // Open the main file by default
-            const mainFile =
-              newFiles.find(
-                (f) =>
-                  f.path.includes("App.") ||
-                  f.path.includes("index.") ||
-                  f.path.includes("main.") ||
-                  f.path === "src/App.js" ||
-                  f.path === "src/App.tsx" ||
-                  f.path === "index.html"
-              ) || newFiles[0];
-
-            if (mainFile) {
-              openFileInTab(mainFile.path);
-            }
-
-            // Auto-expand common folders
-            setOpenFolders(
-              new Set([
-                "src",
-                "public",
-                "components",
-                "pages",
-                "styles",
-                "utils",
-              ])
-            );
-          }
-        } catch (parseError) {
-          console.error("Error parsing AI response:", parseError);
-          console.error("Raw result:", result); // Debug log
-
-          // Fallback: treat as single file
-          const fileName = detectFileName(content, result);
-          const singleFile: FileItem = {
-            path: fileName,
-            content: result,
-          };
-
-          setProjectFiles([singleFile]);
-
-          // Update chat history with single file
+          setProjectFiles(newFiles);
           setChats((prevChats) => {
-            return prevChats.map((chat) => {
+            const updatedChats = prevChats.map((chat) => {
               if (chat.id === chatId) {
-                return {
+                const updatedChat = {
                   ...chat,
-                  projectFiles: [singleFile],
+                  projectFiles: newFiles,
                 };
+                saveChat(updatedChat);
+                return updatedChat;
               }
               return chat;
             });
+            return updatedChats;
           });
+          const mainFile =
+            newFiles.find(
+              (f) =>
+                f.path.includes("App.") ||
+                f.path.includes("index.") ||
+                f.path.includes("main.") ||
+                f.path === "src/App.js" ||
+                f.path === "src/App.tsx" ||
+                f.path === "index.html"
+            ) || newFiles[0];
 
-          openFileInTab(fileName);
+          if (mainFile && !activeFile) {
+            openFileInTab(mainFile.path);
+          } else if (
+            activeFile &&
+            !newFiles.find((f) => f.path === activeFile)
+          ) {
+            if (mainFile) {
+              openFileInTab(mainFile.path);
+            }
+          }
+          setOpenFolders(
+            new Set(["src", "public", "components", "pages", "styles", "utils"])
+          );
         }
       }
     } catch (error) {
-      console.error("Error generating response:", error);
-
-      // Add error message
+      logger.error("Error generating response", error);
       const errorMessage: Message = {
         id: (Date.now() + 1).toString(),
         role: "assistant",
         content: "Sorry, I encountered an error processing your request.",
       };
-
       setMessages((prev) => [...prev, errorMessage]);
-
-      // Update in chat history
       setChats((prevChats) => {
         return prevChats.map((chat) => {
           if (chat.id === chatId) {
@@ -323,33 +388,9 @@ export default function HeroSection() {
     }
   };
 
-  const detectFileName = (prompt: string, code: string): string => {
-    const lowerPrompt = prompt.toLowerCase();
-    const lowerCode = code.toLowerCase();
-
-    if (lowerPrompt.includes("react") || lowerCode.includes("import react")) {
-      return "src/App.tsx";
-    } else if (
-      lowerCode.includes("<!doctype html") ||
-      lowerCode.includes("<html")
-    ) {
-      return "index.html";
-    } else if (lowerCode.includes("def ") || lowerPrompt.includes("python")) {
-      return "main.py";
-    } else if (
-      lowerCode.includes("function ") ||
-      lowerCode.includes("const ")
-    ) {
-      return "script.js";
-    } else {
-      return "file.txt";
-    }
-  };
-
   const openFileInTab = (filePath: string) => {
     setActiveFile(filePath);
 
-    // Add to tabs if not already open
     const fileName = filePath.split("/").pop() || filePath;
     const existingTab = openTabs.find((tab) => tab.path === filePath);
 
@@ -384,21 +425,18 @@ export default function HeroSection() {
   };
 
   const handleFileChange = (filePath: string, newContent: string) => {
-    // Update projectFiles state
     setProjectFiles((prev) =>
       prev.map((file) =>
         file.path === filePath ? { ...file, content: newContent } : file
       )
     );
 
-    // Mark tab as dirty
     setOpenTabs((prev) =>
       prev.map((tab) =>
         tab.path === filePath ? { ...tab, isDirty: true } : tab
       )
     );
 
-    // Update the file in chat history if there's an active chat
     if (activeChat) {
       setChats((prevChats) => {
         return prevChats.map((chat) => {
@@ -433,7 +471,6 @@ export default function HeroSection() {
 
   const downloadProject = () => {
     if (projectFiles.length === 1) {
-      // Single file download
       const file = projectFiles[0];
       const element = document.createElement("a");
       const blob = new Blob([file.content], { type: "text/plain" });
@@ -443,7 +480,6 @@ export default function HeroSection() {
       element.click();
       document.body.removeChild(element);
     } else {
-      // Multiple files - create a zip-like structure
       const projectStructure = projectFiles
         .map(
           (file) => `// ${file.path}\n${file.content}\n\n${"=".repeat(50)}\n\n`
@@ -470,17 +506,14 @@ export default function HeroSection() {
   };
 
   const startNewChat = () => {
-    // Check if there's already an empty chat
     const hasEmptyChat = chats.some((chat) => chat.messages.length === 0);
 
-    // If there's already an empty chat and we're on it, don't create another one
     if (activeChat) {
       const currentChat = chats.find((chat) => chat.id === activeChat);
       if (currentChat && currentChat.messages.length === 0) {
-        return; // Don't create a new empty chat if the current one is empty
+        return;
       }
     } else if (hasEmptyChat) {
-      // If there's an empty chat somewhere else, switch to it instead of creating a new one
       const emptyChat = chats.find((chat) => chat.messages.length === 0);
       if (emptyChat) {
         switchToChat(emptyChat.id);
@@ -492,34 +525,64 @@ export default function HeroSection() {
     setProjectFiles([]);
     setOpenTabs([]);
     setActiveFile(null);
-    setChatStarted(true); // Change this to true to show the empty chat interface
+    setChatStarted(false);
     setInitialPrompt("");
     setCurrentMessage("");
-    setHasInteracted(false);
+    setActiveChat(null);
 
-    // Create a new empty chat with a generic name
-    const chatId = createNewChat(""); // Pass empty string to get "New Chat" as name
-    setActiveChat(chatId);
+    router.push("/");
   };
 
-  // Make chats and functions available globally
+  // Delete a chat
+  const deleteChat = (chatId: string) => {
+    setChats((prev) => prev.filter((chat) => chat.id !== chatId));
+
+    if (activeChat === chatId) {
+      const remainingChats = chats.filter((chat) => chat.id !== chatId);
+      if (remainingChats.length > 0) {
+        switchToChat(remainingChats[0].id);
+      } else {
+        setActiveChat(null);
+        setMessages([]);
+        setProjectFiles([]);
+        setOpenTabs([]);
+        setActiveFile(null);
+        setChatStarted(false);
+        setInitialPrompt("");
+        setCurrentMessage("");
+      }
+    }
+  };
+
   useEffect(() => {
     try {
-      // @ts-ignore - Adding global access for the sidebar
-      window.devBuddyState = {
+      (
+        window as Window & {
+          devBuddyState?: {
+            chats: Chat[];
+            startNewChat: () => void;
+            switchToChat: (id: string) => void;
+            deleteChat: (id: string) => void;
+          };
+        }
+      ).devBuddyState = {
         chats,
         startNewChat,
         switchToChat,
+        deleteChat,
       };
     } catch (error) {
       logger.error("Failed to update global state", error);
     }
-  }, [chats]);
+  }, [chats, startNewChat, switchToChat, deleteChat]);
 
   return (
     <div className="h-full flex flex-col">
+      <LoginModal
+        isOpen={status === "unauthenticated" && showLoginModal}
+        onClose={() => setShowLoginModal(false)}
+      />
       {!chatStarted ? (
-        // Initial view with large text input
         <div className="flex-1 flex flex-col items-center justify-center px-4 font-Inter">
           <div className="text-center">
             <div className="text-[36px] sm:text-[44px] mb-4 font-semibold text-white">
@@ -731,29 +794,55 @@ export default function HeroSection() {
                   </div>
                 </div>
 
-                {projectFiles.length > 0 && (
-                  <div className="flex items-center space-x-2">
-                    <Button
-                      onClick={copyActiveFile}
-                      variant="outline"
-                      size="sm"
-                      className="text-[#cccccc] border-[#2a2a2a] hover:bg-[#37373d] h-8"
-                      disabled={!activeFile}
+                <div className="flex items-center space-x-2">
+                  {/* Add Editor/Preview toggle buttons */}
+                  <div className="flex border border-[#2a2a2a] rounded-md overflow-hidden mr-2">
+                    <button
+                      className={`px-3 py-1 text-xs ${
+                        !showPreview
+                          ? "bg-[#37373d] text-white"
+                          : "bg-transparent text-[#cccccc]"
+                      }`}
+                      onClick={() => setShowPreview(false)}
                     >
-                      <Copy size={14} className="mr-1" />
-                      Copy
-                    </Button>
-                    <Button
-                      onClick={downloadProject}
-                      variant="outline"
-                      size="sm"
-                      className="text-[#cccccc] border-[#2a2a2a] hover:bg-[#37373d] h-8"
+                      Editor
+                    </button>
+                    <button
+                      className={`px-3 py-1 text-xs ${
+                        showPreview
+                          ? "bg-[#37373d] text-white"
+                          : "bg-transparent text-[#cccccc]"
+                      }`}
+                      onClick={() => setShowPreview(true)}
                     >
-                      <Download size={14} className="mr-1" />
-                      Download
-                    </Button>
+                      Preview
+                    </button>
                   </div>
-                )}
+
+                  {projectFiles.length > 0 && (
+                    <div className="flex items-center space-x-2">
+                      <Button
+                        onClick={copyActiveFile}
+                        variant="outline"
+                        size="sm"
+                        className="text-[#cccccc] border-[#2a2a2a] hover:bg-[#37373d] h-8"
+                        disabled={!activeFile}
+                      >
+                        <Copy size={14} className="mr-1" />
+                        Copy
+                      </Button>
+                      <Button
+                        onClick={downloadProject}
+                        variant="outline"
+                        size="sm"
+                        className="text-[#cccccc] border-[#2a2a2a] hover:bg-[#37373d] h-8"
+                      >
+                        <Download size={14} className="mr-1" />
+                        Download
+                      </Button>
+                    </div>
+                  )}
+                </div>
               </div>
 
               {/* File Tabs */}
@@ -764,9 +853,10 @@ export default function HeroSection() {
                 onTabClose={closeTab}
               />
 
-              {/* Code Editor */}
               <div className="flex-1">
-                {projectFiles.length > 0 ? (
+                {showPreview ? (
+                  <Preview projectFiles={projectFiles} visible={showPreview} />
+                ) : projectFiles.length > 0 ? (
                   <MultiFileEditor
                     files={projectFiles}
                     activeFile={activeFile}
@@ -774,18 +864,7 @@ export default function HeroSection() {
                     readOnly={false}
                   />
                 ) : (
-                  <div className="h-full flex items-center justify-center text-[#cccccc] bg-[#1e1e1e]">
-                    <div className="text-center">
-                      <div className="text-6xl mb-6">⚡</div>
-                      <div className="text-xl mb-3 font-medium">
-                        Ready to Build
-                      </div>
-                      <div className="text-sm text-[#858585] max-w-md">
-                        Describe what you want to build and get a complete
-                        project with multiple files
-                      </div>
-                    </div>
-                  </div>
+                  ""
                 )}
               </div>
             </div>
